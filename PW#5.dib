@@ -43,13 +43,13 @@ class Message
 
     public void Handle()
     {
-        Interlocked.Increment(ref messageHandled);
-        Assert.NotEqual(id, Thread.CurrentThread.ManagedThreadId);
+        Interlocked.Increment(ref messageHandled); 
+        Assert.NotEqual(id, Thread.CurrentThread.ManagedThreadId); 
     }
 
     public static void Check()
     {
-        Assert.Equal(200, messageHandled);
+        Assert.Equal(200, messageHandled); 
     }
 }
 
@@ -60,7 +60,34 @@ using System.Collections.Concurrent;
 var queue1 = new BlockingCollection<Message>(2); //очередь первого потока
 var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
 
-// Здесь писать решение
+void Program(BlockingCollection<Message> fromQ, BlockingCollection<Message> inQ)
+{
+    for (int i=0; i<100;i++)
+    {
+        var mes = fromQ.Take(); 
+        mes.Handle();
+        inQ.Add(new Message());
+    }
+}
+
+#!csharp
+
+var thread_one = new Thread(() => Program(queue1, queue2));
+var thread_two = new Thread(() => Program(queue2, queue1));
+
+#!csharp
+
+queue1.Add(new Message());
+thread_one.Start();
+thread_two.Start();
+
+thread_one.Join();
+thread_two.Join();
+
+#!csharp
+
+while (queue1.Count > 0) queue1.Take();
+while (queue2.Count > 0) queue2.Take();
 
 #!csharp
 
