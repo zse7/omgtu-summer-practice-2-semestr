@@ -185,8 +185,10 @@ var resultSeveral = DefiniteIntegral.Solve(-100, 100, Math.Sin, optimalStep, opt
 stopwatchSeveral.Stop();
 long timeSeveral = stopwatchMulti.ElapsedMilliseconds;
 
+
 Console.WriteLine($"Optimal step: {optimalStep}");
 Console.WriteLine($"Optimal threads: {optimalThreads}");
 Console.WriteLine($"OneThreaded time: {timeOne} ms");
 Console.WriteLine($"SeveralThreaded time: {timeSeveral} ms");
 Console.WriteLine($"Difference: {((timeOne - timeSeveral) / (double)timeOne) * 100}%");
+
