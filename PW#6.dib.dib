@@ -37,10 +37,198 @@
 Для этого следует использовать условные события, которые позволят убедиться, что оба потока запустились и готовы читать и писать объекты и только потом запускать таймер.
 2. Для итогового вывода сравнивать усредненные значения.
 
-#!markdown
+#!csharp
 
-// здесь писать код
+// Install the ScottPlot NuGet package
+//#r "nuget:ScottPlot, 5.0.*"
+
+// Setup a custom formatter to display plots as images
+using Microsoft.DotNet.Interactive.Formatting;
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+#!csharp
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
+
+#!csharp
+
+const int ItemCount = 1000000;
+const int TestCount = 10;
+
+#!csharp
+
+// BlockingCollection
+List<double> TestBlockingCollection()
+{
+    List<double> times = new List<double>();
+    for (int i = 0; i < TestCount; i++)
+    {
+        double producerTime = 0;
+        double consumerTime = 0;
+        var collection = new BlockingCollection<int>();
+        var producerReady = new ManualResetEvent(false); 
+        var consumerReady = new ManualResetEvent(false);
+
+        var producerThread = new Thread(() =>
+        {
+            producerReady.Set(); // уведомляем о готовности потока
+            consumerReady.WaitOne(); // ждем готовности потребителя
+
+            var stopwatch = Stopwatch.StartNew();
+            for (int j = 0; j < ItemCount; j++)
+            {
+                collection.Add(j);
+            }
+            stopwatch.Stop();
+            producerTime = stopwatch.Elapsed.TotalMilliseconds;
+        });
+
+        var consumerThread = new Thread(() =>
+        {
+            producerReady.WaitOne();
+            consumerReady.Set();
+
+            var stopwatch = Stopwatch.StartNew();
+            for (int j = 0; j < ItemCount; j++) 
+            {
+                collection.Take();
+            }
+            stopwatch.Stop();
+            consumerTime = stopwatch.Elapsed.TotalMilliseconds;
+        });
+        
+        producerThread.Start(); 
+        consumerThread.Start();
+        producerThread.Join();
+        consumerThread.Join();
+        times.Add(producerTime + consumerTime);
+    }
+    return times;
+}
+int[] x = Enumerable.Range(1,TestCount).Select(i => i).ToArray<int>();
+ScottPlot.Plot plt = new();
+var blockingCollectionTimes = TestBlockingCollection();
+plt.Add.Scatter(x, blockingCollectionTimes.ToArray()); 
+plt.Save("BlockingCollection.png", 400, 300);
+plt
+
+#!csharp
+
+// ConcurrentQueue
+List<double> TestConcurrentQueue()
+{
+    var times = new List<double>();
+
+    for (int i = 0; i < TestCount; i++)
+    {
+        double producerTime = 0;
+        double consumerTime = 0;
+        var queue = new ConcurrentQueue<int>();
+        var producerReady = new ManualResetEvent(false);
+        var consumerReady = new ManualResetEvent(false);
+
+        var producerThread = new Thread(() =>
+        {
+            producerReady.Set();
+            consumerReady.WaitOne();
+
+            var stopwatch = Stopwatch.StartNew();
+            for (int j = 0; j < ItemCount; j++)
+            {
+                queue.Enqueue(j);
+            }
+            stopwatch.Stop();
+            producerTime = stopwatch.Elapsed.TotalMilliseconds;
+        });
+
+        var consumerThread = new Thread(() =>
+        {
+            producerReady.WaitOne();
+            consumerReady.Set();
+
+            var stopwatch = Stopwatch.StartNew();
+            for (int j = 0; j < ItemCount; j++)
+            {
+                queue.TryDequeue(out int item);
+            }
+            stopwatch.Stop();
+            consumerTime = stopwatch.Elapsed.TotalMilliseconds;
+        });
+
+        producerThread.Start();
+        consumerThread.Start();
+        producerThread.Join();
+        consumerThread.Join();
+        times.Add(producerTime + consumerTime);
+    }
+
+    return times;
+}
+int[] x = Enumerable.Range(1,TestCount).Select(i => i).ToArray<int>();
+ScottPlot.Plot plt = new();
+var concurrentQueueTimes = TestConcurrentQueue();
+plt.Add.Scatter(x, concurrentQueueTimes.ToArray()); 
+plt.Save("ConcurrentQueue.png", 400, 300);
+plt
+
+#!csharp
+
+// непотокобезопасная
+List<double> TestNonThreadSafeQueue()
+{
+    var times = new List<double>();
+
+    for (int i = 0; i < TestCount; i++)
+    {
+        var queue = new Queue<int>();
+        
+        var writeStopwatch = Stopwatch.StartNew();
+        for (int j = 0; j < ItemCount; j++) queue.Enqueue(j);
+        writeStopwatch.Stop();
+        var writeTime = writeStopwatch.Elapsed.TotalMilliseconds;
+
+        var readStopwatch = Stopwatch.StartNew();
+        for (int j = 0; j < ItemCount; j++) queue.Dequeue();
+        readStopwatch.Stop();
+        var readTime = writeStopwatch.Elapsed.TotalMilliseconds;
+
+        times.Add(writeTime + readTime);
+    }
+
+    return times;
+}
+int[] x = Enumerable.Range(1,TestCount).Select(i => i).ToArray<int>();
+ScottPlot.Plot plt = new();
+var nonThreadSafeQueueTimes = TestNonThreadSafeQueue();
+plt.Add.Scatter(x, nonThreadSafeQueueTimes.ToArray()); 
+plt.Save("Непотокобезопасная.png", 400, 300);
+plt
+
+#!csharp
+
+double GetAverageTime(List<double> times)
+{
+    return times.Average();
+}
+var blockingCollectionAverageTime = GetAverageTime(blockingCollectionTimes);
+var concurrentQueueAverageTime = GetAverageTime(concurrentQueueTimes);
+var nonThreadSafeQueueAverageTime = GetAverageTime(nonThreadSafeQueueTimes);
+Console.WriteLine($"Среднее время для BlockingCollection: {blockingCollectionAverageTime} мс");
+Console.WriteLine($"Среднее время для ConcurrentQueue: {concurrentQueueAverageTime} мс");
+Console.WriteLine($"Среднее время для непотокобезопасной очереди: {nonThreadSafeQueueAverageTime} мс");
 
 #!markdown
 
 ## Вывод
+Среднее время работы непотокобезопасной очереди, затраченное на чтение и запись, составило 19,1286 мс, что на 31.8% больше, чем среднее время (на чтение и запись) потокобезопасной очереди ConcurrentQueue: 14,512989999999999 мс.
+Сравнивая две потокобезопасные очереди BlockingCollection и ConcurrentQueue, выяснилось, что ConcurrentQueue работает быстрее.
+
+Среднее время, затарченное на чтение и запись, исходя из 10 тестов:
+BlockingCollection: 352,19339 мс
+ConcurrentQueue: 14,512989999999999 мс
+Непотокобезопасная очередь (Queue): 19,1286 мс
