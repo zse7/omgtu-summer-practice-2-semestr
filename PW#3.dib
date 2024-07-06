@@ -32,9 +32,12 @@
 
 #!csharp
 
-//
-// Вычисление определенного интеграла
-//
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using static System.Threading.Barrier;
+using System.Diagnostics;
+
 class DefiniteIntegral
 {
     //
@@ -45,22 +48,147 @@ class DefiniteIntegral
     //
     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        double sum = 0; //общая сумма
+        int steps = (int)((b-a)/step); //общее количество шагов n 
+        double steps_ = (b-a)/steps; // шаг разбиения
+        Barrier barrier = new Barrier(threadsnumber+1); 
+        void Program(int index) 
+        {
+            double summa = 0; 
+            int shag = steps / threadsnumber; //кол-во шагов, которые должен обрабатывать каждый поток
+            int the_start = index * shag; //начальный шаг для текущего потока
+            int the_end = the_start + shag; //конечный
+            if (index == threadsnumber - 1) the_end = steps;
+            for (int i = the_start; i < the_end; i++)
+            {
+                double x_1 = a + i * steps_;
+                double x_2 = a + (i + 1) * steps_;
+                summa += 0.5 * (function(x_1) + function(x_2)) * steps_;
+            }
+            double value1, value2;
+            do
+            {
+                value1 = sum; // Сохраняем текущее значение sum
+                value2 = value1 + summa; //Вычисляем новое значение
+            }
+            while (value1 != Interlocked.CompareExchange(ref sum, value2, value1)); //
+
+            barrier.SignalAndWait(); //сигнал о завершении работы потока, пусть теперь ждет другие
+        }
+        Thread[] threads = new Thread[threadsnumber];
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            int index = i;
+            threads[i] = new Thread(() => Program(index));
+            threads[i].Start();
+        }
+        barrier.SignalAndWait(); //основной поток ждет
+        return sum;
     }
 }
 
 #!csharp
 
-#r "nuget: xunit, 2.8.1"
+// Install the ScottPlot NuGet package
+//#r "nuget:ScottPlot, 5.0.*"
 
-using Xunit;
+// Setup a custom formatter to display plots as images
+using Microsoft.DotNet.Interactive.Formatting;
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
 
-var X = (double x) => x;
-var SIN = (double x) => Math.Sin(x);
+#!csharp
 
-Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
+//Тестирование различных шагов
+void testSteps(double step)
+{
+    var stopwatch = Stopwatch.StartNew();
+    var result = DefiniteIntegral.Solve(-100, 100, Math.Sin, step, 1);
+    stopwatch.Stop();
+    Console.WriteLine($"Step: {step}, Time: {stopwatch.ElapsedMilliseconds} ms, Res: {result}");
+}
 
-Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
+// Вызываем для разных шагов
+testSteps(1e-1);
+testSteps(1e-2);
+testSteps(1e-3);
+testSteps(1e-4); //оптимальный
+testSteps(1e-5);
+testSteps(1e-6);
+double optimalStep = 1e-4; //найденный оптимальный шаг
 
-Assert.Equal(10, DefiniteIntegral.Solve(0, 5, X, 1e-6, 8), 1e-5);
+#!csharp
+
+//тестирование потоков
+void testThreads(int threadsNumber, double step)
+{
+    var stopwatch = Stopwatch.StartNew();
+    var result = DefiniteIntegral.Solve(-100, 100, Math.Sin, step, threadsNumber);
+    stopwatch.Stop();
+    Console.WriteLine($"Threads: {threadsNumber}, Time: {stopwatch.ElapsedMilliseconds} ms, Result: {result}");
+}
+double optimalStep = 1e-4; // найденный оптимальный шаг
+//вызов для разных количеств потоков
+for (int i = 1; i <= 16; i++)
+{
+    testThreads(i, optimalStep);
+}
+int optimalThreads = 6; //найденное оптимальное количество потоков
+
+#!csharp
+
+ScottPlot.Plot plt = new();
+double[] threads = Enumerable.Range(1, 6).Select(x => x * 1.0).ToArray();
+double[] solvings = Enumerable.Range(1, 6).Select(x => 0.0).ToArray();
+for (int j = 0; j < 7; j++)
+{
+    for(int i = 1; i < 7; i++)
+    {
+    var time = System.Diagnostics.Stopwatch.StartNew();
+    DefiniteIntegral.Solve(-100, 100, Math.Sin, 1e-4, i);
+    time.Stop();
+    solvings[i - 1] += Convert.ToDouble("0," + Convert.ToString(time).Split(".", StringSplitOptions.RemoveEmptyEntries)[1]) / 7;
+}}
+plt.Add.Scatter(solvings, threads)
+
+#!csharp
+
+//Функция для однопоточного вычисления:
+public static double OneThreaded(double a, double b, Func<double, double> function, double step)
+{
+    double sum = 0;
+    int steps = (int)((b - a) / step);
+    double steps_ = (b - a) / steps;
+
+    for (int i = 0; i < steps; i++)
+    {
+        double x_1 = a + i * steps_;
+        double x_2 = a + (i + 1) * steps_;
+        sum += 0.5 * (function(x_1) + function(x_2)) * steps_;
+    }
+
+    return sum;
+}
+//OneThreaded(-100,100,Math.Sin,optimalStep)
+
+#!csharp
+
+//Сравнение
+
+var stopwatchOne = Stopwatch.StartNew();
+var resultOne = OneThreaded(-100, 100, Math.Sin, optimalStep);
+stopwatchOne.Stop();
+long timeOne = stopwatchSingle.ElapsedMilliseconds;
+
+var stopwatchSeveral = Stopwatch.StartNew();
+var resultSeveral = DefiniteIntegral.Solve(-100, 100, Math.Sin, optimalStep, optimalThreads);
+stopwatchSeveral.Stop();
+long timeSeveral = stopwatchMulti.ElapsedMilliseconds;
+
+
+Console.WriteLine($"Optimal step: {optimalStep}");
+Console.WriteLine($"Optimal threads: {optimalThreads}");
+Console.WriteLine($"OneThreaded time: {timeOne} ms");
+Console.WriteLine($"SeveralThreaded time: {timeSeveral} ms");
+Console.WriteLine($"Difference: {((timeOne - timeSeveral) / (double)timeOne) * 100}%");
+
