@@ -35,12 +35,246 @@
 
 #!csharp
 
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+
+#!csharp
+
+public interface ICommand
+{
+    void Execute();
+}
+
+#!csharp
+
 public interface IScheduler
 {
-    bool HasCommand()
+    bool HasCommand();
     ICommand Select();
     void Add(ICommand cmd);
 }
+
+#!csharp
+
+public class TestCommand : ICommand
+{
+    private string message;
+    private bool throwException;
+
+    public TestCommand(string message, bool throwException = false)
+    {
+        if (message == null) throw new ArgumentNullException(nameof(message));
+        this.message = message;
+        this.throwException = throwException;
+    }
+
+    public void Execute()
+    {
+        Console.WriteLine($"Выполнение команды: {message}");
+        if (throwException) throw new InvalidOperationException("Исключение в команде");
+    }
+}
+
+#!csharp
+
+public class LongRunningCommand : ICommand
+{
+    private int step; //счетчик
+
+    public LongRunningCommand(int steps)
+    {
+        step = steps;
+    }
+
+    public void Execute()
+    {
+        if (step > 0)
+        {
+            Console.WriteLine($"Выполнение длительной команды. Оставшиеся шаги: {step}");
+            step--;
+        }
+    }
+    public bool IsCompleted => step <= 0; //true if все шаги выполнены
+}
+
+#!csharp
+
+public class WrapperCommand: ICommand
+{
+    private ICommand command;
+    private IScheduler sheduler;
+
+    public WrapperCommand(ICommand command, IScheduler sheduler)
+    {
+        if(command == null) throw new ArgumentNullException(nameof(command));
+        if(sheduler == null) throw new ArgumentNullException(nameof(sheduler));
+
+        this.command = command;
+        this.sheduler = sheduler;
+    }
+
+    public void Execute()
+    {
+        command.Execute();
+
+        if (command is LongRunningCommand longRunningCommand && !longRunningCommand.IsCompleted) sheduler.Add(this);
+    }
+}
+
+#!csharp
+
+public class Scheduler : IScheduler
+{
+    private ConcurrentQueue<ICommand> queue = new ConcurrentQueue<ICommand>();
+
+    public bool HasCommand() //проверка доступных команд
+    {
+        return !queue.IsEmpty;
+    }
+
+    public ICommand Select() //выбор след. команды для выполнения
+    {
+        queue.TryDequeue(out var command);
+        return command;
+    }
+
+    public void Add(ICommand cmd) //добавляем новую команду в планировщик 
+    {
+        queue.Enqueue(cmd);
+    }
+}
+
+#!csharp
+
+public class ServerThread
+{
+    private Thread thread;
+    private IScheduler scheduler = new Scheduler(); 
+    private ManualResetEvent commandEvent = new ManualResetEvent(false);
+    private bool isRunning = true;
+    private bool softStopRequested = false;
+    private bool hardStopRequested = false;
+
+    public ServerThread()
+    {
+        thread = new Thread(Run);
+        thread.Start();
+    }
+
+    public void EnqueueCommand(ICommand command)
+    {
+        if (command == null) throw new ArgumentNullException(nameof(command));
+
+        var wrapped_command = new WrapperCommand(command, scheduler);
+        scheduler.Add(wrapped_command);
+        commandEvent.Set();
+    }
+
+    public void RequestSoftStop()
+    {
+        softStopRequested = true;
+        commandEvent.Set();
+    }
+
+    public void RequestHardStop()
+    {
+        hardStopRequested = true;
+        isRunning = false;
+        commandEvent.Set();
+    }
+
+    private void Run()
+    {
+        while (isRunning || scheduler.HasCommand())
+        {
+            ICommand command = scheduler.Select();
+
+            if (command != null)
+            {
+                try
+                {
+                    command.Execute();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Исключение при выполнении команды: {ex.Message}");
+                }
+            }
+            else
+            {
+                commandEvent.WaitOne();
+                commandEvent.Reset();
+            }
+
+            if (hardStopRequested)
+                break;
+        }
+
+        if (hardStopRequested)
+        {
+            Console.WriteLine("Запрошена жёсткая остановка. Немедленная остановка потока.");
+        }
+        else if (softStopRequested)
+        {
+            Console.WriteLine("Поток мягко остановлен.");
+        }
+    }
+
+    public void Stop()
+    {
+        isRunning = false;
+        commandEvent.Set();
+        thread.Join();
+    }
+}
+
+#!csharp
+
+public class SoftStop : ICommand
+{
+    private ServerThread serverThread;
+
+    public SoftStop(ServerThread serverThread)
+    {
+        if (serverThread == null) throw new ArgumentNullException(nameof(serverThread));
+        this.serverThread = serverThread;
+    }
+
+    public void Execute()
+    {
+        serverThread.RequestSoftStop();
+    }
+}
+
+public class HardStop : ICommand
+{
+    private ServerThread serverThread;
+
+    public HardStop(ServerThread serverThread)
+    {
+        if (serverThread == null) throw new ArgumentNullException(nameof(serverThread));
+        this.serverThread = serverThread;
+    }
+
+    public void Execute()
+    {
+        serverThread.RequestHardStop();
+    }
+}
+
+#!csharp
+
+//тест планировщика с длительными операциями
+var serverThread = new ServerThread();
+
+serverThread.EnqueueCommand(new TestCommand("Команда 1"));
+serverThread.EnqueueCommand(new LongRunningCommand(5));
+serverThread.EnqueueCommand(new TestCommand("Команда 2"));
+serverThread.EnqueueCommand(new SoftStop(serverThread));
+
+serverThread.Stop();
+Console.WriteLine("Тест завершён.");
 
 #!markdown
 
