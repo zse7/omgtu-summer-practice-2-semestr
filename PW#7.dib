@@ -22,6 +22,186 @@ public interface ICommand
     void Execute();
 }
 
+#!csharp
+
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+public class ServerThread
+{
+    private Thread thread;
+    private ConcurrentQueue<ICommand> commandQueue = new ConcurrentQueue<ICommand>();
+    private ManualResetEvent commandEvent = new ManualResetEvent(false);
+    private bool isRunning = true; //должен ли поток продолжать работу?
+    private bool softStopRequested = false; //запрошена мягкая остановка?
+    private bool hardStopRequested = false; //запрошена жесткая остановка?
+
+    public ServerThread()
+    {
+        thread = new Thread(Run);
+        thread.Start();
+    }
+
+    public void EnqueueCommand(ICommand command) //добавляет команду в очередь и сигнализирует о наличии новой команды
+    {
+        if (command == null) throw new ArgumentNullException(nameof(command));
+        commandQueue.Enqueue(command);
+        commandEvent.Set();
+    }
+
+    public void RequestSoftStop() //запрашивает мягкую остановку потока
+    {
+        softStopRequested = true;
+        commandEvent.Set();
+    }
+
+    public void RequestHardStop() //запрашивает жёсткую остановку потока
+    {
+        hardStopRequested = true;
+        isRunning = false; //остановить обработку новых команд сразу
+        commandEvent.Set();
+    }
+
+    private void Run()
+    {
+        while (isRunning || !commandQueue.IsEmpty)
+        {
+            if (commandQueue.TryDequeue(out var command))
+            {
+                try
+                {
+                    command.Execute();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Исключение при выполнении команды: {ex.Message}");
+                }
+            }
+            else
+            {
+                commandEvent.WaitOne();
+                commandEvent.Reset();
+            }
+
+            if (hardStopRequested)
+                break;
+        }
+
+        if (hardStopRequested)
+        {
+            Console.WriteLine("Запрошена жёсткая остановка. Немедленная остановка потока.");
+        }
+        else if (softStopRequested)
+        {
+            Console.WriteLine("Поток мягко остановлен.");
+        }
+    }
+
+    public void Stop() //останавливает поток и ждёт его завершения.
+    {
+        isRunning = false;
+        commandEvent.Set();
+        thread.Join();
+    }
+}
+
+#!csharp
+
+public class HardStop : ICommand
+{
+    private ServerThread serverThread;
+
+    public HardStop(ServerThread serverThread)
+    {
+        if (serverThread == null) throw new ArgumentNullException(nameof(serverThread));
+        this.serverThread = serverThread;
+    }
+
+    public void Execute()
+    {
+        serverThread.RequestHardStop();
+    }
+}
+
+#!csharp
+
+public class SoftStop : ICommand
+{
+    private ServerThread serverThread;
+
+    public SoftStop(ServerThread serverThread)
+    {
+        if (serverThread == null) throw new ArgumentNullException(nameof(serverThread));
+        this.serverThread = serverThread;
+    }
+
+    public void Execute()
+    {
+        serverThread.RequestSoftStop();
+    }
+}
+
+#!csharp
+
+public class TestCommand : ICommand
+{
+    private string message;
+    private bool throwException;
+
+    public TestCommand(string message, bool throwException = false)
+    {
+        if (message == null) throw new ArgumentNullException(nameof(message));
+        this.message = message;
+        this.throwException = throwException;
+    }
+
+    public void Execute()
+    {
+        Console.WriteLine($"Выполнение команды: {message}");
+        if (throwException) throw new InvalidOperationException("Исключение в команде");
+    }
+}
+
+#!csharp
+
+//обычная работа сервера
+var serverThread1 = new ServerThread();
+
+serverThread1.EnqueueCommand(new TestCommand("Команда 1"));
+serverThread1.EnqueueCommand(new TestCommand("Команда 2"));
+serverThread1.EnqueueCommand(new TestCommand("Команда 3"));
+
+serverThread1.EnqueueCommand(new SoftStop(serverThread1));
+
+serverThread1.Stop();
+Console.WriteLine("Тест завершён.");
+
+#!csharp
+
+//жёсткая остановка сервера
+var serverThread2 = new ServerThread();
+
+serverThread2.EnqueueCommand(new TestCommand("Команда 1"));
+serverThread2.EnqueueCommand(new TestCommand("Команда 2"));
+
+serverThread2.EnqueueCommand(new HardStop(serverThread2));
+
+serverThread2.Stop();
+Console.WriteLine("Тест завершён.");
+
+#!csharp
+
+//исключение при выполнении команды 
+var serverThread3 = new ServerThread();
+
+serverThread3.EnqueueCommand(new TestCommand("Команда 1"));
+serverThread3.EnqueueCommand(new TestCommand("Команда 2"));
+serverThread3.EnqueueCommand(new TestCommand("Команда 3 с исключением", true)); // Исключение здесь
+serverThread3.EnqueueCommand(new SoftStop(serverThread3));
+
+serverThread3.Stop();
+Console.WriteLine("Тест завершён.");
+
 #!markdown
 
 Классы, наследующие интерйес ICommand будем называть **Командами.**
